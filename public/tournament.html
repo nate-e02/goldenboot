@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Tournament - GOLDENBOOT TOURNAMENT HAWASSA</title>
+  <link rel="stylesheet" href="/css/style.css" />
+</head>
+<body>
+  <header class="site-header">
+    <div class="brand"><a href="/" style="color:inherit;text-decoration:none;">GOLDENBOOT TOURNAMENT <small>HAWASSA</small></a></div>
+    <nav id="header-nav"></nav>
+  </header>
+
+  <main>
+    <h1 id="page-title">Tournament</h1>
+    <div class="tabs">
+      <button class="tab-btn" id="tab-men">Men's</button>
+      <button class="tab-btn" id="tab-women">Women's</button>
+    </div>
+
+    <div id="tournament-picker" class="card" style="display:none;">
+      <label>Select tournament</label>
+      <select id="tournament-select"></select>
+    </div>
+
+    <div id="bracket-container"></div>
+  </main>
+
+  <footer class="site-footer">GOLDENBOOT TOURNAMENT HAWASSA</footer>
+
+  <script src="/js/api.js"></script>
+  <script src="/js/bracket.js"></script>
+</body>
+</html>
