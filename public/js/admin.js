@@ -93,11 +93,10 @@ async function renderTournamentsTab() {
       <table>
         <thead><tr><th>Name</th><th>Gender</th><th>Year</th><th>Size</th></tr></thead>
         <tbody>
-          ${
-            tournaments.length
-              ? tournaments.map((t) => `<tr><td>${t.name}</td><td>${t.gender}</td><td>${t.year}</td><td>${t.size} teams</td></tr>`).join('')
-              : '<tr><td colspan="4" style="color:var(--muted);">None yet.</td></tr>'
-          }
+          ${tournaments.length
+      ? tournaments.map((t) => `<tr><td>${t.name}</td><td>${t.gender}</td><td>${t.year}</td><td>${t.size} teams</td></tr>`).join('')
+      : '<tr><td colspan="4" style="color:var(--muted);">None yet.</td></tr>'
+    }
         </tbody>
       </table>
     </div>
@@ -303,12 +302,12 @@ async function renderBracketTab() {
     const { clubs } = await api.get(`/api/clubs?tournament_id=${tSelect.value}`);
     box.innerHTML = clubs.length
       ? clubs
-          .map(
-            (c, i) => `<label style="display:flex;align-items:center;gap:8px;margin:4px 0;">
+        .map(
+          (c, i) => `<label style="display:flex;align-items:center;gap:8px;margin:4px 0;">
               <input type="checkbox" value="${c.id}" class="bracket-club-checkbox" /> ${c.name}
             </label>`
-          )
-          .join('')
+        )
+        .join('')
       : '<p style="color:var(--muted);">Add clubs to this tournament first.</p>';
   };
 
@@ -317,22 +316,58 @@ async function renderBracketTab() {
     if (!tSelect.value) { list.innerHTML = 'No tournament selected.'; return; }
     const { rounds } = await api.get(`/api/tournaments/${tSelect.value}/bracket`);
     const allMatches = rounds.flatMap((r) => r.matches.map((m) => ({ ...m, roundName: r.name })));
+
+    let clubs = [];
+    if (user.role === 'superadmin') {
+      const clubsRes = await api.get(`/api/clubs?tournament_id=${tSelect.value}`);
+      clubs = clubsRes.clubs;
+    }
+    const clubOptions = (selectedId) =>
+      `<option value="">TBD</option>` +
+      clubs.map((c) => `<option value="${c.id}" ${c.id === selectedId ? 'selected' : ''}>${c.name}</option>`).join('');
+
     list.innerHTML = allMatches.length
       ? `<table><thead><tr><th>Round</th><th>Match</th><th>Status</th><th></th></tr></thead><tbody>
           ${allMatches
-            .map(
-              (m) => `<tr>
+        .map(
+          (m) => `<tr>
                 <td>${m.roundName}</td>
-                <td>${m.team1_name || 'TBD'} vs ${m.team2_name || 'TBD'}</td>
+                <td>
+                  ${user.role === 'superadmin'
+              ? `<select class="edit-team1" data-match="${m.id}">${clubOptions(m.team1_id)}</select>
+                         vs
+                         <select class="edit-team2" data-match="${m.id}">${clubOptions(m.team2_id)}</select>
+                         <button class="btn small" data-save-teams="${m.id}">Save</button>`
+              : `${m.team1_name || 'TBD'} vs ${m.team2_name || 'TBD'}`
+            }
+                </td>
                 <td><span class="status-pill ${m.status}">${m.status}</span></td>
                 <td><a href="/match.html?id=${m.id}" class="btn small secondary">Open</a></td>
               </tr>`
-            )
-            .join('')}
+        )
+        .join('')}
         </tbody></table>`
       : '<p style="color:var(--muted);">No bracket generated yet.</p>';
-  };
 
+    if (user.role === 'superadmin') {
+      list.querySelectorAll('[data-save-teams]').forEach((btn) => {
+        btn.addEventListener('click', async () => {
+          const matchId = btn.dataset.saveTeams;
+          const t1 = list.querySelector(`.edit-team1[data-match="${matchId}"]`).value;
+          const t2 = list.querySelector(`.edit-team2[data-match="${matchId}"]`).value;
+          try {
+            await api.put(`/api/matches/${matchId}/teams`, {
+              team1_id: t1 ? Number(t1) : null,
+              team2_id: t2 ? Number(t2) : null,
+            });
+            loadMatchList();
+          } catch (err) {
+            alert(err.message);
+          }
+        });
+      });
+    }
+  };
   tSelect.addEventListener('change', () => {
     loadClubCheckboxes();
     loadMatchList();
@@ -388,14 +423,14 @@ async function renderAdminsTab() {
         <thead><tr><th>Username</th><th>Role</th><th></th></tr></thead>
         <tbody>
           ${admins
-            .map(
-              (a) => `<tr>
+      .map(
+        (a) => `<tr>
                 <td>${a.username}</td>
                 <td>${a.role}</td>
                 <td>${a.id === user.id ? '<span style="color:var(--muted);">(you)</span>' : `<button class="btn danger small" data-del-admin="${a.id}">Remove</button>`}</td>
               </tr>`
-            )
-            .join('')}
+      )
+      .join('')}
         </tbody>
       </table>
     </div>

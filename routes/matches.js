@@ -91,6 +91,37 @@ router.put('/:id/schedule', requireRole('superadmin', 'admin'), (req, res) => {
   res.json({ ok: true });
 });
 
+// Superadmin only: manually edit who plays who in an already-generated match.
+// Lets the superadmin fix a bracket pairing (e.g. wrong seeding) after the
+// fact. Since changing the matchup invalidates any result already recorded,
+// this also clears that match's goal events and resets its score/winner/status.
+router.put('/:id/teams', requireRole('superadmin'), (req, res) => {
+  const { team1_id, team2_id } = req.body;
+  const match = db.prepare('SELECT * FROM matches WHERE id = ?').get(req.params.id);
+  if (!match) return res.status(404).json({ error: 'Match not found.' });
+
+  const validateClub = (clubId) => {
+    if (clubId === null || clubId === undefined || clubId === '') return true;
+    const club = db.prepare('SELECT * FROM clubs WHERE id = ? AND tournament_id = ?')
+      .get(clubId, match.tournament_id);
+    return !!club;
+  };
+
+  if (!validateClub(team1_id) || !validateClub(team2_id)) {
+    return res.status(400).json({ error: 'Both clubs must belong to this tournament.' });
+  }
+
+  db.prepare('DELETE FROM match_events WHERE match_id = ?').run(req.params.id);
+  db.prepare(`
+    UPDATE matches
+    SET team1_id = ?, team2_id = ?, team1_score = 0, team2_score = 0,
+        winner_id = NULL, status = 'scheduled'
+    WHERE id = ?
+  `).run(team1_id || null, team2_id || null, req.params.id);
+
+  res.json({ ok: true });
+});
+
 // Admin or referee changes status: 'scheduled' -> 'live' -> 'finished'
 // To finish a match that's still tied on goals (e.g. decided on penalties),
 // include { winner_id } in the body to say who goes through.
