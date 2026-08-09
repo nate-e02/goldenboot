@@ -1,17 +1,20 @@
 // db/database.js
 // -----------------------------------------------------------------------
-// This file opens (and if needed, creates) the SQLite database file at
-// db/goldenboot.db, and makes sure all the tables we need exist.
+// This file opens (and if needed, creates) the SQLite database file, and
+// makes sure all the tables we need exist.
+//
+// The path is configurable via the DB_PATH env var so that in production
+// (e.g. on Render) it can point at a persistent disk instead of the app's
+// local filesystem, which gets wiped on every restart/redeploy.
 //
 // SQLite stores the WHOLE database in a single file. That means backing
-// up your tournament data is as easy as copying db/goldenboot.db somewhere
-// safe.
+// up your tournament data is as easy as copying that file somewhere safe.
 // -----------------------------------------------------------------------
 
 const path = require('path');
 const Database = require('better-sqlite3');
 
-const dbPath = path.join(__dirname, 'goldenboot.db');
+const dbPath = process.env.DB_PATH || path.join(__dirname, 'goldenboot.db');
 const db = new Database(dbPath);
 
 // Enforce foreign key constraints (e.g. deleting a tournament also

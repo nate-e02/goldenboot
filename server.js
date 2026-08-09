@@ -11,22 +11,48 @@
 
 const express = require('express');
 const session = require('express-session');
+const rateLimit = require('express-rate-limit');
 const path = require('path');
 
-require('./db/database');
+require('./db/database'); // makes sure the database + tables exist
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+const isProd = process.env.NODE_ENV === 'production';
+
+if (isProd && !process.env.SESSION_SECRET) {
+  console.error('SESSION_SECRET env var is required in production. Set it and restart.');
+  process.exit(1);
+}
+
+// Most hosts (Render, Railway, Heroku, Fly) terminate HTTPS in front of
+// your app - this tells Express to trust that, so secure cookies work.
+if (isProd) app.set('trust proxy', 1);
 
 app.use(express.json());
 app.use(
   session({
-    secret: 'goldenboot-hawassa-change-this-secret', // change this for real deployments
+    secret: process.env.SESSION_SECRET || 'goldenboot-hawassa-dev-only-secret',
     resave: false,
     saveUninitialized: false,
-    cookie: { maxAge: 1000 * 60 * 60 * 12 }, // 12 hour login
+    cookie: {
+      maxAge: 1000 * 60 * 60 * 12, // 12 hour login
+      httpOnly: true,
+      secure: isProd,      // only send the cookie over HTTPS in production
+      sameSite: 'lax',
+    },
   })
 );
+
+// Slow down brute-force password guessing on login.
+const loginLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 10,                  // 10 attempts per IP per window
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many login attempts. Try again in a few minutes.' },
+});
+app.use('/api/auth/login', loginLimiter);
 
 // ---- API routes ----------------------------------------------------------
 app.use('/api/auth', require('./routes/auth'));
