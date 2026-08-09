@@ -13,7 +13,7 @@ const express = require('express');
 const session = require('express-session');
 const path = require('path');
 
-require('./db/database'); // makes sure the database + tables exist
+require('./db/database');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
