@@ -4,6 +4,13 @@
 // (goals/assists/cards). If you're logged in as an admin or referee,
 // an extra panel appears letting you set the schedule, start/finish the
 // match, and log events live during the game.
+//
+// Goals/cards can be logged without knowing the player yet (useful when
+// the scorer isn't confirmed during a live match) - pick "Unknown / not
+// confirmed yet" instead of a name. Superadmins get an extra control on
+// each event afterwards to fill in (or correct) the player. Editing an
+// event only updates that one event row, so it never affects any other
+// match.
 // -----------------------------------------------------------------------
 
 const matchId = new URLSearchParams(window.location.search).get('id');
@@ -40,20 +47,19 @@ function renderPublicView(match, events) {
 
     <h3>Match Events</h3>
     <ul class="event-list">
-      ${
-        events.length === 0
-          ? '<li style="color:var(--muted);">No events logged yet.</li>'
-          : events
-              .map(
-                (e) => `
+      ${events.length === 0
+      ? '<li style="color:var(--muted);">No events logged yet.</li>'
+      : events
+        .map(
+          (e) => `
         <li>
           <span class="event-tag ${e.event_type}">${eventIcon(e.event_type)} ${e.event_type}</span>
-          <span>${e.player_name || 'Unknown player'} (${e.club_name})</span>
+          <span>${e.player_name || ''} (${e.club_name})</span>
           ${e.minute ? `<span style="margin-left:auto;color:var(--muted);">${e.minute}'</span>` : ''}
         </li>`
-              )
-              .join('')
-      }
+        )
+        .join('')
+    }
     </ul>
   `;
 }
@@ -69,15 +75,19 @@ async function renderEntryPanel(match, events) {
   if (match.team1_id) players1 = (await api.get(`/api/players?club_id=${match.team1_id}`)).players;
   if (match.team2_id) players2 = (await api.get(`/api/players?club_id=${match.team2_id}`)).players;
 
+  // Every team's option list starts with an "unknown" choice (empty value)
+  // so an event can be logged for a team without picking a specific player.
+  // The club is still tracked via data-club, so the score/team stats are
+  // never affected by leaving the scorer unknown.
   const playerOptions = (players, clubId, clubName) =>
+    `<option value="" data-club="${clubId}">Unknown / not confirmed yet</option>` +
     players.map((p) => `<option value="${p.id}" data-club="${clubId}">${p.name} (${clubName})</option>`).join('');
 
   panel.innerHTML = `
     <h3>Match Control (${currentUser.role})</h3>
 
-    ${
-      isAdmin
-        ? `
+    ${isAdmin
+      ? `
     <div class="card">
       <h4 style="margin-top:0;">Schedule</h4>
       <label>Date & time</label>
@@ -86,7 +96,7 @@ async function renderEntryPanel(match, events) {
       <input type="text" id="venue-input" value="${match.venue || ''}" placeholder="e.g. Hawassa Stadium" />
       <button class="btn" style="margin-top:12px;" id="save-schedule-btn">Save Schedule</button>
     </div>`
-        : ''
+      : ''
     }
 
     <div class="card">
@@ -99,10 +109,9 @@ async function renderEntryPanel(match, events) {
 
     <div class="card">
       <h4 style="margin-top:0;">Log an Event</h4>
-      ${
-        !match.team1_id || !match.team2_id
-          ? '<p style="color:var(--muted);">Both teams need to be set for this match first.</p>'
-          : `
+      ${!match.team1_id || !match.team2_id
+      ? '<p style="color:var(--muted);">Both teams need to be set for this match first.</p>'
+      : `
       <label>Event type</label>
       <select id="event-type-select">
         <option value="goal">⚽ Goal</option>
@@ -119,21 +128,34 @@ async function renderEntryPanel(match, events) {
       <input type="number" id="event-minute-input" min="0" max="130" placeholder="e.g. 23" />
       <button class="btn" style="margin-top:12px;" id="add-event-btn">Add Event</button>
       `
-      }
+    }
     </div>
 
     <div class="card">
-      <h4 style="margin-top:0;">Remove a logged event</h4>
+      <h4 style="margin-top:0;">Match Events</h4>
       <ul class="event-list" id="removable-events">
         ${events
-          .map(
-            (e) => `<li>
+      .map((e) => {
+        // Editing the scorer is superadmin-only, and only ever touches
+        // this one event (by its own id) - no other match or event
+        // is ever affected.
+        const clubPlayers = e.club_id === match.team1_id ? players1 : players2;
+        const editControls =
+          currentUser.role === 'superadmin'
+            ? `<select class="edit-scorer-select" data-event="${e.id}">
+                     <option value="">Unknown / not confirmed yet</option>
+                     ${clubPlayers.map((p) => `<option value="${p.id}" ${p.id === e.player_id ? 'selected' : ''}>${p.name}</option>`).join('')}
+                   </select>
+                   <button class="btn small" data-save-scorer="${e.id}">Save</button>`
+            : '';
+        return `<li>
               <span class="event-tag ${e.event_type}">${eventIcon(e.event_type)} ${e.event_type}</span>
-              <span>${e.player_name || '?'} (${e.club_name})</span>
+              <span>${e.player_name || ''} (${e.club_name})</span>
+              ${editControls}
               <button class="btn danger small" style="margin-left:auto;" data-remove-event="${e.id}">Remove</button>
-            </li>`
-          )
-          .join('') || '<li style="color:var(--muted);">Nothing logged yet.</li>'}
+            </li>`;
+      })
+      .join('') || '<li style="color:var(--muted);">Nothing logged yet.</li>'}
       </ul>
     </div>
 
@@ -211,7 +233,10 @@ function wireEntryPanelEvents() {
       try {
         await api.post(`/api/matches/${matchId}/events`, {
           club_id: Number(selectedOption.dataset.club),
-          player_id: Number(playerSelect.value),
+          // Empty value means "Unknown / not confirmed yet" was picked -
+          // send null instead of the player's id so the goal/card is
+          // logged for the club without naming a scorer.
+          player_id: playerSelect.value ? Number(playerSelect.value) : null,
           event_type: document.getElementById('event-type-select').value,
           minute: Number(document.getElementById('event-minute-input').value) || null,
         });
@@ -227,6 +252,23 @@ function wireEntryPanelEvents() {
     btn.addEventListener('click', async () => {
       await api.del(`/api/events/${btn.dataset.removeEvent}`);
       loadMatch();
+    });
+  });
+
+  // Superadmin: save a (re)assigned scorer for one specific event.
+  document.querySelectorAll('[data-save-scorer]').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      const eventId = btn.dataset.saveScorer;
+      const select = document.querySelector(`.edit-scorer-select[data-event="${eventId}"]`);
+      try {
+        await api.put(`/api/events/${eventId}`, {
+          player_id: select.value ? Number(select.value) : null,
+        });
+        showMsg('Scorer updated.', 'success');
+        loadMatch();
+      } catch (err) {
+        showMsg(err.message, 'error');
+      }
     });
   });
 }

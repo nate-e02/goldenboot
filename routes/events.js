@@ -58,4 +58,25 @@ router.delete('/events/:id', requireRole('superadmin', 'admin', 'referee'), (req
   res.json({ ok: true });
 });
 
+// Superadmin only: attach or change the player credited for an existing
+// event. Used to fill in an "unknown scorer" goal after the match. This
+// only touches the one event row by id, so it never affects any other
+// match or event.
+router.put('/events/:id', requireRole('superadmin'), (req, res) => {
+  const { player_id } = req.body;
+  const event = db.prepare('SELECT * FROM match_events WHERE id = ?').get(req.params.id);
+  if (!event) return res.status(404).json({ error: 'Event not found.' });
+
+  if (player_id) {
+    const player = db.prepare('SELECT * FROM players WHERE id = ? AND club_id = ?')
+      .get(player_id, event.club_id);
+    if (!player) {
+      return res.status(400).json({ error: 'That player is not on the club credited with this event.' });
+    }
+  }
+
+  db.prepare('UPDATE match_events SET player_id = ? WHERE id = ?').run(player_id || null, req.params.id);
+  res.json({ ok: true });
+});
+
 module.exports = router;
