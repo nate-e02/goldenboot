@@ -14,7 +14,7 @@ const session = require('express-session');
 const rateLimit = require('express-rate-limit');
 const path = require('path');
 
-require('./db/database'); // makes sure the database + tables exist
+const db = require('./db/database'); // makes sure the database + tables exist
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -67,6 +67,15 @@ app.use('/api', require('./routes/events')); // adds /api/matches/:id/events and
 // ---- front-end -------------------------------------------------------------
 app.use(express.static(path.join(__dirname, 'public')));
 
-app.listen(PORT, () => {
-  console.log(`GOLDENBOOT TOURNAMENT HAWASSA running at http://localhost:${PORT}`);
-});
+// Schema setup against Postgres is async (unlike the old synchronous
+// better-sqlite3 open), so wait for it before accepting requests.
+db.ready
+  .then(() => {
+    app.listen(PORT, () => {
+      console.log(`GOLDENBOOT TOURNAMENT HAWASSA running at http://localhost:${PORT}`);
+    });
+  })
+  .catch((err) => {
+    console.error('Failed to set up the database:', err);
+    process.exit(1);
+  });

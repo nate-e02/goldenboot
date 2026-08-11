@@ -13,6 +13,13 @@ const db = require('../db/database');
 
 const router = express.Router();
 
+// better-sqlite3 threw synchronously, so Express caught a failed query on
+// its own and fell through to the default error handler. `pg` calls are
+// async, so a rejected query inside an async handler would otherwise become
+// an unhandled promise rejection and crash the whole process - ah() routes
+// it to next(err) instead, restoring the old crash-free behavior.
+const ah = (fn) => (req, res, next) => fn(req, res, next).catch(next);
+
 function leaderboard(eventType, gender) {
   return db.prepare(`
     SELECT p.id AS player_id, p.name AS player_name, c.name AS club_name,
@@ -22,19 +29,19 @@ function leaderboard(eventType, gender) {
     JOIN clubs c ON e.club_id = c.id
     JOIN tournaments t ON c.tournament_id = t.id
     WHERE e.event_type = ? AND t.gender = ?
-    GROUP BY p.id
+    GROUP BY p.id, p.name, c.name
     ORDER BY total DESC, p.name ASC
   `).all(eventType, gender);
 }
 
-router.get('/scorers', (req, res) => {
+router.get('/scorers', ah(async (req, res) => {
   const gender = req.query.gender === 'women' ? 'women' : 'men';
-  res.json({ gender, leaderboard: leaderboard('goal', gender) });
-});
+  res.json({ gender, leaderboard: await leaderboard('goal', gender) });
+}));
 
-router.get('/assists', (req, res) => {
+router.get('/assists', ah(async (req, res) => {
   const gender = req.query.gender === 'women' ? 'women' : 'men';
-  res.json({ gender, leaderboard: leaderboard('assist', gender) });
-});
+  res.json({ gender, leaderboard: await leaderboard('assist', gender) });
+}));
 
 module.exports = router;

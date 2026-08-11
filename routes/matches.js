@@ -17,32 +17,39 @@ const { requireRole } = require('../middleware/auth');
 
 const router = express.Router();
 
+// better-sqlite3 threw synchronously, so Express caught a failed query on
+// its own and fell through to the default error handler. `pg` calls are
+// async, so a rejected query inside an async handler would otherwise become
+// an unhandled promise rejection and crash the whole process - ah() routes
+// it to next(err) instead, restoring the old crash-free behavior.
+const ah = (fn) => (req, res, next) => fn(req, res, next).catch(next);
+
 // Recalculate team1_score / team2_score for a match by counting its
 // 'goal' events. Call this any time an event is added or removed.
-function recalcScore(matchId) {
-  const match = db.prepare('SELECT * FROM matches WHERE id = ?').get(matchId);
+async function recalcScore(matchId) {
+  const match = await db.prepare('SELECT * FROM matches WHERE id = ?').get(matchId);
   if (!match) return;
 
-  const goalsFor = (clubId) =>
-    db.prepare(`
+  const goalsFor = async (clubId) =>
+    (await db.prepare(`
       SELECT COUNT(*) AS n FROM match_events
       WHERE match_id = ? AND club_id = ? AND event_type = 'goal'
-    `).get(matchId, clubId).n;
+    `).get(matchId, clubId)).n;
 
-  const team1_score = match.team1_id ? goalsFor(match.team1_id) : 0;
-  const team2_score = match.team2_id ? goalsFor(match.team2_id) : 0;
+  const team1_score = match.team1_id ? await goalsFor(match.team1_id) : 0;
+  const team2_score = match.team2_id ? await goalsFor(match.team2_id) : 0;
 
-  db.prepare('UPDATE matches SET team1_score = ?, team2_score = ? WHERE id = ?')
+  await db.prepare('UPDATE matches SET team1_score = ?, team2_score = ? WHERE id = ?')
     .run(team1_score, team2_score, matchId);
 }
 
 // Once a match is finished, push its winner into the correct slot of
 // the next round's match (team1 if this was an odd position, team2 if
 // even). If there is no next round, this WAS the final - nothing to do.
-function advanceWinner(match) {
+async function advanceWinner(match) {
   const nextRound = match.round + 1;
   const nextPosition = Math.ceil(match.position / 2);
-  const nextMatch = db.prepare(`
+  const nextMatch = await db.prepare(`
     SELECT * FROM matches WHERE tournament_id = ? AND round = ? AND position = ?
   `).get(match.tournament_id, nextRound, nextPosition);
 
@@ -50,15 +57,15 @@ function advanceWinner(match) {
 
   const slotIsTeam1 = match.position % 2 === 1;
   if (slotIsTeam1) {
-    db.prepare('UPDATE matches SET team1_id = ? WHERE id = ?').run(match.winner_id, nextMatch.id);
+    await db.prepare('UPDATE matches SET team1_id = ? WHERE id = ?').run(match.winner_id, nextMatch.id);
   } else {
-    db.prepare('UPDATE matches SET team2_id = ? WHERE id = ?').run(match.winner_id, nextMatch.id);
+    await db.prepare('UPDATE matches SET team2_id = ? WHERE id = ?').run(match.winner_id, nextMatch.id);
   }
 }
 
 // Get one match with team names, tournament info, and its full event list
-router.get('/:id', (req, res) => {
-  const match = db.prepare(`
+router.get('/:id', ah(async (req, res) => {
+  const match = await db.prepare(`
     SELECT m.*, c1.name AS team1_name, c2.name AS team2_name, cw.name AS winner_name,
            t.name AS tournament_name, t.gender AS tournament_gender
     FROM matches m
@@ -71,7 +78,7 @@ router.get('/:id', (req, res) => {
 
   if (!match) return res.status(404).json({ error: 'Match not found.' });
 
-  const events = db.prepare(`
+  const events = await db.prepare(`
     SELECT e.*, p.name AS player_name, c.name AS club_name
     FROM match_events e
     LEFT JOIN players p ON e.player_id = p.id
@@ -81,38 +88,38 @@ router.get('/:id', (req, res) => {
   `).all(req.params.id);
 
   res.json({ match, events });
-});
+}));
 
 // Admin sets/edits the schedule
-router.put('/:id/schedule', requireRole('superadmin', 'admin'), (req, res) => {
+router.put('/:id/schedule', requireRole('superadmin', 'admin'), ah(async (req, res) => {
   const { match_date, venue } = req.body;
-  db.prepare('UPDATE matches SET match_date = ?, venue = ? WHERE id = ?')
+  await db.prepare('UPDATE matches SET match_date = ?, venue = ? WHERE id = ?')
     .run(match_date || null, venue || null, req.params.id);
   res.json({ ok: true });
-});
+}));
 
 // Superadmin only: manually edit who plays who in an already-generated match.
 // Lets the superadmin fix a bracket pairing (e.g. wrong seeding) after the
 // fact. Since changing the matchup invalidates any result already recorded,
 // this also clears that match's goal events and resets its score/winner/status.
-router.put('/:id/teams', requireRole('superadmin'), (req, res) => {
+router.put('/:id/teams', requireRole('superadmin'), ah(async (req, res) => {
   const { team1_id, team2_id } = req.body;
-  const match = db.prepare('SELECT * FROM matches WHERE id = ?').get(req.params.id);
+  const match = await db.prepare('SELECT * FROM matches WHERE id = ?').get(req.params.id);
   if (!match) return res.status(404).json({ error: 'Match not found.' });
 
-  const validateClub = (clubId) => {
+  const validateClub = async (clubId) => {
     if (clubId === null || clubId === undefined || clubId === '') return true;
-    const club = db.prepare('SELECT * FROM clubs WHERE id = ? AND tournament_id = ?')
+    const club = await db.prepare('SELECT * FROM clubs WHERE id = ? AND tournament_id = ?')
       .get(clubId, match.tournament_id);
     return !!club;
   };
 
-  if (!validateClub(team1_id) || !validateClub(team2_id)) {
+  if (!(await validateClub(team1_id)) || !(await validateClub(team2_id))) {
     return res.status(400).json({ error: 'Both clubs must belong to this tournament.' });
   }
 
-  db.prepare('DELETE FROM match_events WHERE match_id = ?').run(req.params.id);
-  db.prepare(`
+  await db.prepare('DELETE FROM match_events WHERE match_id = ?').run(req.params.id);
+  await db.prepare(`
     UPDATE matches
     SET team1_id = ?, team2_id = ?, team1_score = 0, team2_score = 0,
         winner_id = NULL, status = 'scheduled'
@@ -120,22 +127,22 @@ router.put('/:id/teams', requireRole('superadmin'), (req, res) => {
   `).run(team1_id || null, team2_id || null, req.params.id);
 
   res.json({ ok: true });
-});
+}));
 
 // Admin or referee changes status: 'scheduled' -> 'live' -> 'finished'
 // To finish a match that's still tied on goals (e.g. decided on penalties),
 // include { winner_id } in the body to say who goes through.
-router.put('/:id/status', requireRole('superadmin', 'admin', 'referee'), (req, res) => {
+router.put('/:id/status', requireRole('superadmin', 'admin', 'referee'), ah(async (req, res) => {
   const { status, winner_id } = req.body;
   if (!['scheduled', 'live', 'finished'].includes(status)) {
     return res.status(400).json({ error: 'status must be scheduled, live or finished.' });
   }
 
-  const match = db.prepare('SELECT * FROM matches WHERE id = ?').get(req.params.id);
+  const match = await db.prepare('SELECT * FROM matches WHERE id = ?').get(req.params.id);
   if (!match) return res.status(404).json({ error: 'Match not found.' });
 
   if (status !== 'finished') {
-    db.prepare('UPDATE matches SET status = ? WHERE id = ?').run(status, req.params.id);
+    await db.prepare('UPDATE matches SET status = ? WHERE id = ?').run(status, req.params.id);
     return res.json({ ok: true });
   }
 
@@ -155,14 +162,14 @@ router.put('/:id/status', requireRole('superadmin', 'admin', 'referee'), (req, r
     });
   }
 
-  db.prepare('UPDATE matches SET status = ?, winner_id = ? WHERE id = ?')
+  await db.prepare('UPDATE matches SET status = ?, winner_id = ? WHERE id = ?')
     .run('finished', finalWinnerId, req.params.id);
 
-  const updated = db.prepare('SELECT * FROM matches WHERE id = ?').get(req.params.id);
-  advanceWinner(updated);
+  const updated = await db.prepare('SELECT * FROM matches WHERE id = ?').get(req.params.id);
+  await advanceWinner(updated);
 
   res.json({ ok: true, winner_id: finalWinnerId });
-});
+}));
 
 module.exports = router;
 module.exports.recalcScore = recalcScore;

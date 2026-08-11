@@ -32,7 +32,7 @@ function roundName(round, rounds) {
 // Builds every match row for a brand-new bracket: round 1 gets the real
 // clubs (in the order given), later rounds start empty and get filled in
 // automatically as winners are recorded (see PUT /matches/:id/result).
-function generateBracket(tournamentId, clubIds) {
+async function generateBracket(tournamentId, clubIds) {
   const size = clubIds.length;
   const rounds = totalRounds(size);
 
@@ -44,35 +44,42 @@ function generateBracket(tournamentId, clubIds) {
   // Round 1: pair up the clubs as given (1v2, 3v4, 5v6, ...)
   const firstRoundMatches = size / 2;
   for (let i = 0; i < firstRoundMatches; i++) {
-    insertMatch.run(tournamentId, 1, i + 1, clubIds[i * 2], clubIds[i * 2 + 1]);
+    await insertMatch.run(tournamentId, 1, i + 1, clubIds[i * 2], clubIds[i * 2 + 1]);
   }
 
   // Later rounds: empty placeholders, winners get slotted in later
   for (let round = 2; round <= rounds; round++) {
     const matchesInRound = size / Math.pow(2, round);
     for (let position = 1; position <= matchesInRound; position++) {
-      insertMatch.run(tournamentId, round, position, null, null);
+      await insertMatch.run(tournamentId, round, position, null, null);
     }
   }
 }
 
 // ---- routes -------------------------------------------------------------
 
+// better-sqlite3 threw synchronously, so Express caught a failed query on
+// its own and fell through to the default error handler. `pg` calls are
+// async, so a rejected query inside an async handler would otherwise become
+// an unhandled promise rejection and crash the whole process - ah() routes
+// it to next(err) instead, restoring the old crash-free behavior.
+const ah = (fn) => (req, res, next) => fn(req, res, next).catch(next);
+
 // List tournaments, optionally filtered by ?gender=men / women
-router.get('/', (req, res) => {
+router.get('/', ah(async (req, res) => {
   const { gender } = req.query;
   const rows = gender
-    ? db.prepare('SELECT * FROM tournaments WHERE gender = ? ORDER BY id DESC').all(gender)
-    : db.prepare('SELECT * FROM tournaments ORDER BY id DESC').all();
+    ? await db.prepare('SELECT * FROM tournaments WHERE gender = ? ORDER BY id DESC').all(gender)
+    : await db.prepare('SELECT * FROM tournaments ORDER BY id DESC').all();
   res.json({ tournaments: rows });
-});
+}));
 
 // Get one tournament plus its full bracket (all matches, with club names)
-router.get('/:id/bracket', (req, res) => {
-  const tournament = db.prepare('SELECT * FROM tournaments WHERE id = ?').get(req.params.id);
+router.get('/:id/bracket', ah(async (req, res) => {
+  const tournament = await db.prepare('SELECT * FROM tournaments WHERE id = ?').get(req.params.id);
   if (!tournament) return res.status(404).json({ error: 'Tournament not found.' });
 
-  const matches = db.prepare(`
+  const matches = await db.prepare(`
     SELECT m.*, c1.name AS team1_name, c2.name AS team2_name, cw.name AS winner_name
     FROM matches m
     LEFT JOIN clubs c1 ON m.team1_id = c1.id
@@ -93,10 +100,10 @@ router.get('/:id/bracket', (req, res) => {
   }
 
   res.json({ tournament, rounds: Object.values(byRound) });
-});
+}));
 
 // Create a tournament (admin only)
-router.post('/', requireRole('superadmin', 'admin'), (req, res) => {
+router.post('/', requireRole('superadmin', 'admin'), ah(async (req, res) => {
   const { name, gender, year, size } = req.body;
   if (!name || !gender) {
     return res.status(400).json({ error: 'name and gender are required.' });
@@ -109,17 +116,17 @@ router.post('/', requireRole('superadmin', 'admin'), (req, res) => {
     return res.status(400).json({ error: 'size must be 2, 4, 8 or 16.' });
   }
 
-  const info = db
+  const info = await db
     .prepare('INSERT INTO tournaments (name, gender, year, size) VALUES (?, ?, ?, ?)')
     .run(name, gender, year || new Date().getFullYear(), bracketSize);
 
   res.status(201).json({ id: info.lastInsertRowid });
-});
+}));
 
 // Generate (or re-generate) the bracket once clubs are ready.
 // Body: { clubIds: [ ... in the order you want them seeded, 1v2, 3v4, ... ] }
-router.post('/:id/generate-bracket', requireRole('superadmin', 'admin'), (req, res) => {
-  const tournament = db.prepare('SELECT * FROM tournaments WHERE id = ?').get(req.params.id);
+router.post('/:id/generate-bracket', requireRole('superadmin', 'admin'), ah(async (req, res) => {
+  const tournament = await db.prepare('SELECT * FROM tournaments WHERE id = ?').get(req.params.id);
   if (!tournament) return res.status(404).json({ error: 'Tournament not found.' });
 
   const { clubIds } = req.body;
@@ -130,10 +137,10 @@ router.post('/:id/generate-bracket', requireRole('superadmin', 'admin'), (req, r
   }
 
   // wipe any existing bracket for this tournament and rebuild it
-  db.prepare('DELETE FROM matches WHERE tournament_id = ?').run(tournament.id);
-  generateBracket(tournament.id, clubIds);
+  await db.prepare('DELETE FROM matches WHERE tournament_id = ?').run(tournament.id);
+  await generateBracket(tournament.id, clubIds);
 
   res.json({ ok: true });
-});
+}));
 
 module.exports = router;
